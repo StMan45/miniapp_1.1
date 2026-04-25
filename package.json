@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "telegram:menu": "node scripts/set-telegram-menu.mjs"
+    "telegram:menu": "node scripts/set-telegram-menu.mjs",
+    "telegram:bot": "node scripts/run-telegram-bot.mjs"
   },
   "dependencies": {
     "next": "16.2.4",
