@@ -203,8 +203,8 @@ async function askOpenRouter(message: string, commandKey: CommandKey | null) {
     throw new Error(raw?.error?.message || "OpenRouter error");
   }
 
-  const message = raw.choices?.[0]?.message;
-  const reply = getAssistantContent(message);
+  const assistantMessage = raw.choices?.[0]?.message;
+  const reply = getAssistantContent(assistantMessage);
   if (!reply) {
     throw new Error("Model returned empty response");
   }
