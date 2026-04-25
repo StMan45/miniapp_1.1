@@ -158,18 +158,27 @@ function getMaxHistory() {
   return Math.min(value, 30);
 }
 
-function getAssistantContent(content) {
-  if (typeof content === "string") {
-    return content;
+function getAssistantContent(message) {
+  const content = message?.content;
+  if (typeof content === "string" && content.trim()) {
+    return content.trim();
   }
 
   if (Array.isArray(content)) {
-    return content
+    const joined = content
       .filter((part) => part && typeof part === "object" && part.type === "text")
       .map((part) => (typeof part.text === "string" ? part.text : ""))
       .filter(Boolean)
       .join("\n")
       .trim();
+    if (joined) {
+      return joined;
+    }
+  }
+
+  const reasoning = message?.reasoning;
+  if (typeof reasoning === "string" && reasoning.trim()) {
+    return reasoning.trim();
   }
 
   return "";
@@ -284,8 +293,8 @@ class TelegramBotRunner {
       throw new Error(reason);
     }
 
-    const content = raw?.choices?.[0]?.message?.content;
-    const reply = getAssistantContent(content);
+    const message = raw?.choices?.[0]?.message;
+    const reply = getAssistantContent(message);
     if (!reply) {
       throw new Error("Model returned empty response");
     }

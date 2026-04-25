@@ -112,11 +112,12 @@ function splitCommand(text: string) {
   };
 }
 
-function getAssistantContent(content: unknown) {
-  if (typeof content === "string") return content;
+function getAssistantContent(message: { content?: unknown; reasoning?: unknown } | undefined) {
+  const content = message?.content;
+  if (typeof content === "string" && content.trim()) return content.trim();
 
   if (Array.isArray(content)) {
-    return content
+    const joined = content
       .filter((item) => item && typeof item === "object" && "type" in item && "text" in item)
       .map((item) => {
         const part = item as { type?: string; text?: unknown };
@@ -125,6 +126,15 @@ function getAssistantContent(content: unknown) {
       .filter(Boolean)
       .join("\n")
       .trim();
+    if (joined) {
+      return joined;
+    }
+  }
+
+  // Fallback for models that return content=null but include reasoning text.
+  const reasoning = message?.reasoning;
+  if (typeof reasoning === "string" && reasoning.trim()) {
+    return reasoning.trim();
   }
 
   return "";
@@ -186,15 +196,15 @@ async function askOpenRouter(message: string, commandKey: CommandKey | null) {
 
   const raw = (await response.json()) as {
     error?: { message?: string };
-    choices?: Array<{ message?: { content?: unknown } }>;
+    choices?: Array<{ message?: { content?: unknown; reasoning?: unknown } }>;
   };
 
   if (!response.ok) {
     throw new Error(raw?.error?.message || "OpenRouter error");
   }
 
-  const content = raw.choices?.[0]?.message?.content;
-  const reply = getAssistantContent(content);
+  const message = raw.choices?.[0]?.message;
+  const reply = getAssistantContent(message);
   if (!reply) {
     throw new Error("Model returned empty response");
   }

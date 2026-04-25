@@ -84,9 +84,10 @@ function getMaxHistory() {
   return Math.min(envValue, 30);
 }
 
-function getAssistantContent(content: unknown) {
-  if (typeof content === "string") {
-    return content;
+function getAssistantContent(message: { content?: unknown; reasoning?: unknown } | undefined) {
+  const content = message?.content;
+  if (typeof content === "string" && content.trim()) {
+    return content.trim();
   }
 
   if (Array.isArray(content)) {
@@ -98,7 +99,16 @@ function getAssistantContent(content: unknown) {
       })
       .filter(Boolean);
 
-    return textParts.join("\n").trim();
+    const joined = textParts.join("\n").trim();
+    if (joined) {
+      return joined;
+    }
+  }
+
+  // Some reasoning models can return content=null and place output in reasoning.
+  const reasoning = message?.reasoning;
+  if (typeof reasoning === "string" && reasoning.trim()) {
+    return reasoning.trim();
   }
 
   return "";
@@ -171,8 +181,10 @@ export async function POST(request: Request) {
       return Response.json({ error: reason }, { status: response.status });
     }
 
-    const first = raw.choices?.[0]?.message?.content;
-    const reply = getAssistantContent(first);
+    const firstMessage = raw.choices?.[0]?.message as
+      | { content?: unknown; reasoning?: unknown }
+      | undefined;
+    const reply = getAssistantContent(firstMessage);
     if (!reply) {
       return Response.json({ error: "Модель вернула пустой ответ" }, { status: 502 });
     }
