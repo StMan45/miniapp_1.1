@@ -1,3 +1,5 @@
+import { appendChatMessage, listChatMessages } from "@/lib/chat-storage";
+
 type IncomingMessage = {
   role: "assistant" | "user";
   text: string;
@@ -122,6 +124,7 @@ export async function POST(request: Request) {
       message?: string;
       history?: IncomingMessage[];
       commandKey?: CommandKey | null;
+      chatId?: string;
     };
 
     const message = body.message?.trim();
@@ -138,16 +141,22 @@ export async function POST(request: Request) {
     const baseUrl = process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
     const appName = process.env.APP_NAME || "SMM Assistant Telegram Bot";
     const maxHistory = getMaxHistory();
+    const chatId = body.chatId?.trim();
     const commandPrompt =
       body.commandKey && Object.hasOwn(COMMAND_PROMPTS, body.commandKey)
         ? COMMAND_PROMPTS[body.commandKey]
         : null;
 
-    const history = Array.isArray(body.history) ? body.history.slice(-maxHistory) : [];
+    const dbHistory = chatId ? await listChatMessages(chatId, maxHistory) : [];
+    const fallbackHistory = Array.isArray(body.history) ? body.history.slice(-maxHistory) : [];
+    const historySource = dbHistory.length
+      ? dbHistory.map((item) => ({ role: item.role, text: item.text }))
+      : fallbackHistory;
+
     const payloadMessages = [
       { role: "system", content: SYSTEM_PROMPT },
       ...(commandPrompt ? [{ role: "system", content: commandPrompt }] : []),
-      ...history
+      ...historySource
         .filter((item) => item && (item.role === "assistant" || item.role === "user") && typeof item.text === "string")
         .map((item) => ({
           role: item.role,
@@ -187,6 +196,11 @@ export async function POST(request: Request) {
     const reply = getAssistantContent(firstMessage);
     if (!reply) {
       return Response.json({ error: "Модель вернула пустой ответ" }, { status: 502 });
+    }
+
+    if (chatId) {
+      await appendChatMessage(chatId, "user", message);
+      await appendChatMessage(chatId, "assistant", reply);
     }
 
     return Response.json({ reply });

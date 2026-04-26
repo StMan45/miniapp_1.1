@@ -17,6 +17,18 @@ type ChatMessage = {
   text: string;
 };
 
+type TelegramWebAppData = {
+  Telegram?: {
+    WebApp?: {
+      initDataUnsafe?: {
+        user?: {
+          id?: number | string;
+        };
+      };
+    };
+  };
+};
+
 const HELP_TEXT = `
 Я SMM-помощник для Instagram Stories, Reels, монтажа, пресетов и шрифтов.
 
@@ -34,9 +46,8 @@ const HELP_TEXT = `
 /help — показать эту подсказку
 `.trim();
 
-const STORAGE_KEY = "smm-miniapp-links-v1";
-const CHAT_STORAGE_KEY = "smm-miniapp-chat-v1";
-const MAX_STORED_MESSAGES = 200;
+const CLIENT_ID_STORAGE_KEY = "smm-miniapp-client-id-v1";
+const MAX_API_HISTORY = 200;
 
 const INITIAL_ASSISTANT_MESSAGE = `${HELP_TEXT}\n\nНапиши запрос, например: "Сделай Reels-план для beauty мастера в стиле luxury".`;
 
@@ -67,77 +78,86 @@ function commandToKey(command: string): CommandKey | null {
   return null;
 }
 
+function getTelegramChatId() {
+  if (typeof window === "undefined") return null;
+  const maybeTelegram = (window as Window & TelegramWebAppData).Telegram;
+  const rawUserId = maybeTelegram?.WebApp?.initDataUnsafe?.user?.id;
+  if (typeof rawUserId === "number" || typeof rawUserId === "string") {
+    return `tg:${rawUserId}`;
+  }
+  return null;
+}
+
+function getGuestChatId() {
+  if (typeof window === "undefined") {
+    return "guest-server";
+  }
+
+  const stored = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+  if (stored && stored.trim()) {
+    return stored;
+  }
+
+  const created = `guest:${createId()}`;
+  localStorage.setItem(CLIENT_ID_STORAGE_KEY, created);
+  return created;
+}
+
 export default function Home() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [links, setLinks] = useState<LinkItem[]>(() => {
+  const [chatId] = useState(() => {
     if (typeof window === "undefined") {
-      return [];
+      return "";
     }
-
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw) as LinkItem[];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      localStorage.removeItem(STORAGE_KEY);
-      return [];
-    }
+    return getTelegramChatId() || getGuestChatId();
   });
-  const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    if (typeof window === "undefined") {
-      return [{ id: createId(), role: "assistant", text: INITIAL_ASSISTANT_MESSAGE }];
-    }
-
-    try {
-      const raw = localStorage.getItem(CHAT_STORAGE_KEY);
-      if (!raw) {
-        return [{ id: createId(), role: "assistant", text: INITIAL_ASSISTANT_MESSAGE }];
-      }
-      const parsed = JSON.parse(raw) as ChatMessage[];
-      if (!Array.isArray(parsed)) {
-        return [{ id: createId(), role: "assistant", text: INITIAL_ASSISTANT_MESSAGE }];
-      }
-
-      const normalized = parsed
-        .filter(
-          (item) =>
-            item &&
-            (item.role === "assistant" || item.role === "user") &&
-            typeof item.text === "string" &&
-            item.text.trim()
-        )
-        .map((item) => ({
-          id: typeof item.id === "string" && item.id.trim() ? item.id : createId(),
-          role: item.role,
-          text: item.text,
-        }))
-        .slice(-MAX_STORED_MESSAGES);
-
-      if (!normalized.length) {
-        return [{ id: createId(), role: "assistant", text: INITIAL_ASSISTANT_MESSAGE }];
-      }
-
-      return normalized;
-    } catch {
-      localStorage.removeItem(CHAT_STORAGE_KEY);
-      return [{ id: createId(), role: "assistant", text: INITIAL_ASSISTANT_MESSAGE }];
-    }
-  });
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(links));
-  }, [links]);
-
-  useEffect(() => {
-    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages.slice(-MAX_STORED_MESSAGES)));
-  }, [messages]);
+  const [isHydrating, setIsHydrating] = useState(true);
+  const [links, setLinks] = useState<LinkItem[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      id: createId(),
+      role: "assistant",
+      text: INITIAL_ASSISTANT_MESSAGE,
+    },
+  ]);
 
   const quickButtons = useMemo(() => ["/preset", "/fonts", "/reels", "/idea", "/links", "/help", "/historyclear"], []);
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        if (!chatId) {
+          return;
+        }
+
+        const [historyResponse, linksResponse] = await Promise.all([
+          fetch(`/api/chat/history?chatId=${encodeURIComponent(chatId)}&limit=${MAX_API_HISTORY}`),
+          fetch(`/api/links?chatId=${encodeURIComponent(chatId)}`),
+        ]);
+
+        if (historyResponse.ok) {
+          const historyData = (await historyResponse.json()) as { messages?: ChatMessage[] };
+          const nextMessages = Array.isArray(historyData.messages) ? historyData.messages : [];
+          if (nextMessages.length > 0) {
+            setMessages(nextMessages);
+          }
+        }
+
+        if (linksResponse.ok) {
+          const linksData = (await linksResponse.json()) as { links?: LinkItem[] };
+          setLinks(Array.isArray(linksData.links) ? linksData.links : []);
+        }
+      } finally {
+        setIsHydrating(false);
+      }
+    })();
+  }, [chatId]);
+
   function addMessage(role: ChatMessage["role"], text: string) {
-    setMessages((prev) => [...prev, { id: createId(), role, text }]);
+    const item: ChatMessage = { id: createId(), role, text };
+    setMessages((prev) => [...prev, item]);
+    return item;
   }
 
   function buildLinksList() {
@@ -148,7 +168,7 @@ export default function Home() {
     const content = links
       .map(
         (item) =>
-          `ID: ${item.id}\nURL: ${item.url}\nОписание: ${item.description || "—"}\nСоздано: ${item.createdAt}`
+          `ID: ${item.id}\nURL: ${item.url}\nОписание: ${item.description || "—"}\nСоздано: ${new Date(item.createdAt).toLocaleString("ru-RU")}`
       )
       .join("\n\n");
 
@@ -167,6 +187,7 @@ export default function Home() {
       body: JSON.stringify({
         message: userInput,
         commandKey,
+        chatId,
         history,
       }),
     });
@@ -182,6 +203,10 @@ export default function Home() {
   async function handleInput(userText: string) {
     const trimmed = userText.trim();
     if (!trimmed) return;
+    if (!chatId) {
+      addMessage("assistant", "Не удалось определить chatId. Перезагрузи страницу.");
+      return;
+    }
 
     addMessage("user", trimmed);
     const { command, args } = splitCommand(trimmed);
@@ -192,14 +217,21 @@ export default function Home() {
     }
 
     if (command === "/historyclear") {
+      const response = await fetch("/api/chat/history", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId }),
+      });
+
+      if (!response.ok) {
+        addMessage("assistant", "Не удалось очистить историю на сервере.");
+        return;
+      }
+
       setMessages([
-        {
-          id: createId(),
-          role: "assistant",
-          text: INITIAL_ASSISTANT_MESSAGE,
-        },
+        { id: createId(), role: "assistant", text: INITIAL_ASSISTANT_MESSAGE },
+        { id: createId(), role: "assistant", text: "История переписки очищена." },
       ]);
-      addMessage("assistant", "История переписки очищена.");
       return;
     }
 
@@ -220,12 +252,26 @@ export default function Home() {
       }
 
       const newItem: LinkItem = {
-        id: createId().slice(0, 8),
-        url,
-        description,
-        createdAt: new Date().toLocaleString("ru-RU"),
+        id: "",
+        url: "",
+        description: "",
+        createdAt: "",
       };
+      const response = await fetch("/api/links", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId, url, description }),
+      });
+      const data = (await response.json()) as { link?: LinkItem; error?: string };
+      if (!response.ok || !data.link) {
+        addMessage("assistant", data.error || "Не удалось сохранить ссылку.");
+        return;
+      }
 
+      newItem.id = data.link.id;
+      newItem.url = data.link.url;
+      newItem.description = data.link.description;
+      newItem.createdAt = data.link.createdAt;
       setLinks((prev) => [newItem, ...prev]);
       addMessage(
         "assistant",
@@ -249,6 +295,16 @@ export default function Home() {
       const exists = links.some((link) => link.id === id);
       if (!exists) {
         addMessage("assistant", `Ссылка с ID ${id} не найдена.`);
+        return;
+      }
+
+      const response = await fetch("/api/links", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId, id }),
+      });
+      if (!response.ok) {
+        addMessage("assistant", "Не удалось удалить ссылку на сервере.");
         return;
       }
 
@@ -277,7 +333,7 @@ export default function Home() {
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = input.trim();
-    if (!text || isLoading) return;
+    if (!text || isLoading || isHydrating) return;
     setInput("");
     await handleInput(text);
   }
@@ -334,12 +390,13 @@ export default function Home() {
               <input
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
-                placeholder="Введите запрос в свободной форме..."
+                placeholder={isHydrating ? "Загружаем историю из базы..." : "Введите запрос в свободной форме..."}
                 className="h-11 flex-1 rounded-xl border border-zinc-300 bg-white px-3 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
+                disabled={isHydrating}
               />
               <button
                 type="submit"
-                disabled={isLoading}
+                disabled={isLoading || isHydrating}
                 className="h-11 rounded-xl bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-blue-400"
               >
                 {isLoading ? "..." : "Отправить"}
