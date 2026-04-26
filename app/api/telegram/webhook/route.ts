@@ -1,4 +1,4 @@
-import { upsertTelegramUser } from "@/lib/chat-storage";
+import { createTelegramLoginCode, upsertTelegramUser } from "@/lib/chat-storage";
 
 type TelegramUpdate = {
   update_id?: number;
@@ -98,6 +98,7 @@ const HELP_TEXT = `
 /fonts — усилить запрос контекстом для font pairs
 /reels — усилить запрос контекстом для Reels-плана
 /idea — усилить запрос контекстом для контент-идей
+/weblogin — получить одноразовый код для входа в web
 /help — показать подсказку
 `.trim();
 
@@ -247,6 +248,20 @@ async function handleMessage(message: NonNullable<TelegramUpdate["message"]>) {
 
   if (command === "/help") {
     await sendMessage(chatId, HELP_TEXT, replyToMessageId);
+    return;
+  }
+
+  if (command === "/weblogin") {
+    if (!from?.id) {
+      await sendMessage(chatId, "Не удалось определить Telegram ID. Попробуйте позже.", replyToMessageId);
+      return;
+    }
+    const loginCode = await createTelegramLoginCode(String(from.id));
+    await sendMessage(
+      chatId,
+      `Код для входа в web: ${loginCode.code}\nДействует 5 минут.\n\nНикому его не передавайте.`,
+      replyToMessageId
+    );
     return;
   }
 

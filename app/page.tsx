@@ -234,6 +234,8 @@ export default function Home() {
   const [isSavingLink, setIsSavingLink] = useState(false);
   const [saveUrlInput, setSaveUrlInput] = useState("");
   const [saveDescriptionInput, setSaveDescriptionInput] = useState("");
+  const [telegramCodeInput, setTelegramCodeInput] = useState("");
+  const [isCodeLoginLoading, setIsCodeLoginLoading] = useState(false);
   const [chatId, setChatId] = useState(() => {
     if (typeof window === "undefined") {
       return "";
@@ -643,6 +645,44 @@ export default function Home() {
     }
   }
 
+  async function onCodeLoginSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const code = telegramCodeInput.trim();
+    if (!/^\d{6}$/.test(code)) {
+      addMessage("assistant", "Введите 6-значный код из команды /weblogin в боте.");
+      return;
+    }
+
+    try {
+      setIsCodeLoginLoading(true);
+      const response = await fetch("/api/auth/telegram/code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = (await response.json()) as {
+        chatId?: string;
+        user?: TelegramLoginResponseUser;
+        error?: string;
+      };
+
+      if (!response.ok || !data.chatId || !data.user) {
+        addMessage("assistant", data.error || "Код входа не принят.");
+        return;
+      }
+
+      setTelegramUser(data.user);
+      setChatId(data.chatId);
+      localStorage.setItem(TELEGRAM_USER_STORAGE_KEY, JSON.stringify(data.user));
+      setTelegramCodeInput("");
+      addMessage("assistant", "Вход по коду выполнен. Синхронизирую историю и ссылки.");
+    } catch {
+      addMessage("assistant", "Ошибка сети при входе по коду.");
+    } finally {
+      setIsCodeLoginLoading(false);
+    }
+  }
+
   function signOutTelegram() {
     setTelegramUser(null);
     if (typeof window !== "undefined") {
@@ -690,6 +730,27 @@ export default function Home() {
                 ) : (
                   <p className="text-xs text-amber-600 dark:text-amber-400">{telegramLoginError || "Загрузка Telegram Login..."}</p>
                 )}
+                <form onSubmit={onCodeLoginSubmit} className="mt-2 space-y-2 rounded-lg border border-zinc-200 p-2 dark:border-zinc-700">
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    Если popup Telegram не проходит: отправьте боту <span className="font-semibold">/weblogin</span> и введите код.
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      value={telegramCodeInput}
+                      onChange={(event) => setTelegramCodeInput(event.target.value.replace(/\D+/g, "").slice(0, 6))}
+                      inputMode="numeric"
+                      placeholder="Код из бота (6 цифр)"
+                      className="h-9 flex-1 rounded-lg border border-zinc-300 bg-white px-3 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isCodeLoginLoading}
+                      className="h-9 rounded-lg bg-blue-600 px-3 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60"
+                    >
+                      {isCodeLoginLoading ? "..." : "Войти"}
+                    </button>
+                  </div>
+                </form>
               </div>
             )}
           </div>
