@@ -1,5 +1,4 @@
 import { createTelegramLoginCode, upsertTelegramUser } from "@/lib/chat-storage";
-
 type TelegramUpdate = {
   update_id?: number;
   message?: {

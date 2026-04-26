@@ -23,10 +23,6 @@ type TelegramWebAppData = {
       initDataUnsafe?: {
         user?: {
           id?: number | string;
-          first_name?: string;
-          last_name?: string;
-          username?: string;
-          photo_url?: string;
         };
       };
     };
@@ -41,22 +37,6 @@ type TelegramLoginResponseUser = {
   photoUrl?: string;
   source?: "telegram_login" | "miniapp" | "bot";
 };
-
-type TelegramWidgetAuthData = {
-  id: number;
-  first_name?: string;
-  last_name?: string;
-  username?: string;
-  photo_url?: string;
-  auth_date: number;
-  hash: string;
-};
-
-declare global {
-  interface Window {
-    onTelegramAuth?: (authData: TelegramWidgetAuthData) => void;
-  }
-}
 
 const HELP_TEXT = `
 Я SMM-помощник для Instagram Stories, Reels, монтажа, пресетов и шрифтов.
@@ -81,7 +61,7 @@ const HELP_TEXT = `
 const CLIENT_ID_STORAGE_KEY = "smm-miniapp-client-id-v1";
 const TELEGRAM_USER_STORAGE_KEY = "smm-telegram-user-v1";
 const MAX_API_HISTORY = 200;
-const TELEGRAM_BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || "";
+const TELEGRAM_BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME?.trim() || "";
 
 const INITIAL_ASSISTANT_MESSAGE = `${HELP_TEXT}\n\nНапиши запрос, например: "Сделай Reels-план для beauty мастера в стиле luxury".`;
 
@@ -185,21 +165,6 @@ function getTelegramChatId() {
   return null;
 }
 
-function getTelegramMiniAppUser() {
-  if (typeof window === "undefined") return null;
-  const maybeTelegram = (window as Window & TelegramWebAppData).Telegram;
-  const user = maybeTelegram?.WebApp?.initDataUnsafe?.user;
-  if (!user?.id) return null;
-  return {
-    telegramId: String(user.id),
-    firstName: user.first_name || "",
-    lastName: user.last_name || "",
-    username: user.username || "",
-    photoUrl: user.photo_url || "",
-    source: "miniapp" as const,
-  };
-}
-
 function getGuestChatId() {
   if (typeof window === "undefined") {
     return "guest-server";
@@ -241,19 +206,19 @@ export default function Home() {
     if (typeof window === "undefined") {
       return "";
     }
-    const miniAppUser = getTelegramMiniAppUser();
-    if (miniAppUser) {
-      return `tg:${miniAppUser.telegramId}`;
-    }
+    const miniAppChatId = getTelegramChatId();
+    if (miniAppChatId) return miniAppChatId;
     const storedUser = getStoredTelegramUser();
-    if (storedUser) {
-      return `tg:${storedUser.telegramId}`;
-    }
+    if (storedUser?.telegramId) return `tg:${storedUser.telegramId}`;
     return getGuestChatId();
   });
   const [telegramUser, setTelegramUser] = useState<TelegramLoginResponseUser | null>(() => {
     if (typeof window === "undefined") return null;
-    return getTelegramMiniAppUser() || getStoredTelegramUser();
+    const miniAppChatId = getTelegramChatId();
+    if (miniAppChatId?.startsWith("tg:")) {
+      return { telegramId: miniAppChatId.slice(3), source: "miniapp" };
+    }
+    return getStoredTelegramUser();
   });
   const [isHydrating, setIsHydrating] = useState(true);
   const [links, setLinks] = useState<LinkItem[]>([]);
@@ -268,101 +233,15 @@ export default function Home() {
   const quickButtons = useMemo(() => ["/preset", "/fonts", "/reels", "/idea", "/links", "/help", "/historyclear"], []);
 
   useEffect(() => {
-    if (!telegramUser?.telegramId || telegramUser.source !== "miniapp") return;
-    if (typeof window !== "undefined") {
-      localStorage.setItem(TELEGRAM_USER_STORAGE_KEY, JSON.stringify(telegramUser));
-    }
-    void fetch("/api/users/me", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(telegramUser),
-    });
-  }, [telegramUser]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    if (getTelegramChatId() || telegramUser || !TELEGRAM_BOT_USERNAME) {
-      return;
-    }
-
-    const container = document.getElementById("telegram-login-root");
-    if (!container) return;
-    container.innerHTML = "";
-
-    window.onTelegramAuth = async (authData: TelegramWidgetAuthData) => {
-      const response = await fetch("/api/auth/telegram", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(authData),
-      });
-      const data = (await response.json()) as {
-        chatId?: string;
-        user?: TelegramLoginResponseUser;
-        error?: string;
-      };
-
-      if (!response.ok || !data.user || !data.chatId) {
-        setMessages((prev) => [
-          ...prev,
-          { id: createId(), role: "assistant", text: data.error || "Не удалось авторизоваться через Telegram." },
-        ]);
-        return;
-      }
-
-      setTelegramUser(data.user);
-      setChatId(data.chatId);
-      localStorage.setItem(TELEGRAM_USER_STORAGE_KEY, JSON.stringify(data.user));
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: createId(),
-          role: "assistant",
-          text: "Telegram авторизация выполнена. Подгружаю персональные данные и историю.",
-        },
-      ]);
-    };
-
-    const script = document.createElement("script");
-    script.async = true;
-    script.src = "https://telegram.org/js/telegram-widget.js?22";
-    script.setAttribute("data-telegram-login", TELEGRAM_BOT_USERNAME);
-    script.setAttribute("data-size", "large");
-    script.setAttribute("data-radius", "10");
-    script.setAttribute("data-userpic", "false");
-    script.setAttribute("data-request-access", "write");
-    script.setAttribute("data-onauth", "onTelegramAuth(user)");
-    container.appendChild(script);
-
-    return () => {
-      if (window.onTelegramAuth) {
-        delete window.onTelegramAuth;
-      }
-    };
-  }, [telegramUser]);
-
-  useEffect(() => {
     void (async () => {
       try {
         if (!chatId) {
           return;
         }
 
-        setIsHydrating(true);
-        setLinks([]);
-        setMessages([
-          {
-            id: createId(),
-            role: "assistant",
-            text: INITIAL_ASSISTANT_MESSAGE,
-          },
-        ]);
-
-        const [historyResponse, linksResponse, userResponse] = await Promise.all([
+        const [historyResponse, linksResponse] = await Promise.all([
           fetch(`/api/chat/history?chatId=${encodeURIComponent(chatId)}&limit=${MAX_API_HISTORY}`),
           fetch(`/api/links?chatId=${encodeURIComponent(chatId)}`),
-          fetch(`/api/users/me?chatId=${encodeURIComponent(chatId)}`),
         ]);
 
         if (historyResponse.ok) {
@@ -376,16 +255,6 @@ export default function Home() {
         if (linksResponse.ok) {
           const linksData = (await linksResponse.json()) as { links?: LinkItem[] };
           setLinks(Array.isArray(linksData.links) ? linksData.links : []);
-        }
-
-        if (userResponse.ok) {
-          const userData = (await userResponse.json()) as { user?: TelegramLoginResponseUser | null };
-          if (userData.user?.telegramId) {
-            setTelegramUser(userData.user);
-            if (typeof window !== "undefined") {
-              localStorage.setItem(TELEGRAM_USER_STORAGE_KEY, JSON.stringify(userData.user));
-            }
-          }
         }
       } finally {
         setIsHydrating(false);
@@ -666,7 +535,6 @@ export default function Home() {
     setChatId(getGuestChatId());
     addMessage("assistant", "Telegram профиль отключен. Вы используете гостевой режим в браузере.");
   }
-
   return (
     <div className="min-h-screen bg-zinc-50 px-4 py-6 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
       <main className="mx-auto grid w-full max-w-6xl gap-4 lg:grid-cols-[320px_1fr]">
@@ -731,7 +599,6 @@ export default function Home() {
               </div>
             )}
           </div>
-
           <div className="mt-4">
             <p className="mb-2 text-sm font-medium">Быстрые действия</p>
             <div className="flex flex-wrap gap-2">
