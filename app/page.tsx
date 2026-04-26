@@ -40,6 +40,9 @@ const HELP_TEXT = `
 /reels — усилить запрос контекстом для Reels-плана
 /idea — усилить запрос контекстом для контент-идей
 /save — сохранить ссылку: /save https://site.com описание
+Также можно отправить шаблон:
+1. https://site.com
+2. описание
 /links — показать сохраненные ссылки
 /linkdelete — удалить ссылку по ID
 /historyclear — очистить сохраненную переписку
@@ -67,6 +70,69 @@ function splitCommand(input: string) {
   return {
     command: trimmed.slice(0, spaceIndex),
     args: trimmed.slice(spaceIndex + 1).trim(),
+  };
+}
+
+function detectSaveLinkIntent(input: string) {
+  const normalized = input.trim();
+  const linkMatch = normalized.match(/https?:\/\/\S+/i);
+  if (!linkMatch) {
+    return null;
+  }
+
+  const hasSaveVerb = /^(сохрани|сохранить|добавь|добавить|save)\b/i.test(normalized);
+  const hasLinkWord = /\b(ссылк|link)\b/i.test(normalized);
+  if (!hasSaveVerb && !hasLinkWord) {
+    return null;
+  }
+
+  const url = linkMatch[0];
+  const description = normalized
+    .replace(url, "")
+    .replace(/^(сохрани|сохранить|добавь|добавить|save)\s*/i, "")
+    .replace(/\b(ссылку|ссылка|ссылки|link)\b/gi, "")
+    .replace(/^[:\s-]+|[:\s-]+$/g, "")
+    .trim();
+
+  return { url, description };
+}
+
+function detectTemplateLinkPayload(input: string) {
+  const lines = input
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  let url = "";
+  let description = "";
+
+  for (const line of lines) {
+    const firstField = line.match(/^(?:1[\).\-\:]?\s*|ссылка[\:\-]?\s*)(https?:\/\/\S+)/i);
+    if (firstField) {
+      url = firstField[1];
+      continue;
+    }
+
+    const secondField = line.match(/^(?:2[\).\-\:]?\s*|описание[\:\-]?\s*)(.+)$/i);
+    if (secondField) {
+      description = secondField[1].trim();
+    }
+  }
+
+  if (!url) {
+    const fallback = input.match(/https?:\/\/\S+/i);
+    if (fallback && /^\s*1[\).\-\:]?/im.test(input)) {
+      url = fallback[0];
+    }
+  }
+
+  if (!url) {
+    return null;
+  }
+
+  return {
+    url,
+    description: description.trim(),
   };
 }
 
@@ -106,6 +172,9 @@ function getGuestChatId() {
 export default function Home() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isSavingLink, setIsSavingLink] = useState(false);
+  const [saveUrlInput, setSaveUrlInput] = useState("");
+  const [saveDescriptionInput, setSaveDescriptionInput] = useState("");
   const [chatId] = useState(() => {
     if (typeof window === "undefined") {
       return "";
@@ -175,6 +244,21 @@ export default function Home() {
     return `Сохраненные ссылки:\n\n${content}`;
   }
 
+  async function saveLink(url: string, description: string) {
+    const response = await fetch("/api/links", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, url, description }),
+    });
+    const data = (await response.json()) as { link?: LinkItem; error?: string };
+    if (!response.ok || !data.link) {
+      throw new Error(data.error || "Не удалось сохранить ссылку.");
+    }
+
+    setLinks((prev) => [data.link as LinkItem, ...prev]);
+    return data.link as LinkItem;
+  }
+
   async function requestAssistantReply(userInput: string, commandKey: CommandKey | null) {
     const history = messages
       .filter((m) => m.role === "assistant" || m.role === "user")
@@ -209,14 +293,27 @@ export default function Home() {
     }
 
     addMessage("user", trimmed);
-    const { command, args } = splitCommand(trimmed);
+    const parsed = splitCommand(trimmed);
+    const detectedSave = detectSaveLinkIntent(trimmed);
+    const templatePayload = detectTemplateLinkPayload(trimmed);
+    const command = parsed.command;
+    const args = parsed.args;
+    const effectiveCommand = command === "/save" ? "/save" : detectedSave || templatePayload ? "/save" : command;
+    const effectiveArgs =
+      command === "/save"
+        ? args
+        : detectedSave
+          ? `${detectedSave.url} ${detectedSave.description}`.trim()
+          : templatePayload
+            ? `${templatePayload.url} ${templatePayload.description}`.trim()
+            : args;
 
-    if (command === "/help") {
+    if (effectiveCommand === "/help") {
       addMessage("assistant", HELP_TEXT);
       return;
     }
 
-    if (command === "/historyclear") {
+    if (effectiveCommand === "/historyclear") {
       const response = await fetch("/api/chat/history", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
@@ -235,8 +332,8 @@ export default function Home() {
       return;
     }
 
-    if (command === "/save") {
-      const parts = args.split(" ").filter(Boolean);
+    if (effectiveCommand === "/save") {
+      const parts = effectiveArgs.split(" ").filter(Boolean);
       const url = parts[0];
       const description = parts.slice(1).join(" ").trim();
 
@@ -251,42 +348,27 @@ export default function Home() {
         return;
       }
 
-      const newItem: LinkItem = {
-        id: "",
-        url: "",
-        description: "",
-        createdAt: "",
-      };
-      const response = await fetch("/api/links", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chatId, url, description }),
-      });
-      const data = (await response.json()) as { link?: LinkItem; error?: string };
-      if (!response.ok || !data.link) {
-        addMessage("assistant", data.error || "Не удалось сохранить ссылку.");
+      try {
+        const saved = await saveLink(url, description);
+        addMessage(
+          "assistant",
+          `Ссылка сохранена.\nID: ${saved.id}\nURL: ${saved.url}\nОписание: ${saved.description || "—"}`
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Не удалось сохранить ссылку.";
+        addMessage("assistant", message);
         return;
       }
-
-      newItem.id = data.link.id;
-      newItem.url = data.link.url;
-      newItem.description = data.link.description;
-      newItem.createdAt = data.link.createdAt;
-      setLinks((prev) => [newItem, ...prev]);
-      addMessage(
-        "assistant",
-        `Ссылка сохранена.\nID: ${newItem.id}\nURL: ${newItem.url}\nОписание: ${newItem.description || "—"}`
-      );
       return;
     }
 
-    if (command === "/links") {
+    if (effectiveCommand === "/links") {
       addMessage("assistant", buildLinksList());
       return;
     }
 
-    if (command === "/linkdelete") {
-      const id = args.trim();
+    if (effectiveCommand === "/linkdelete") {
+      const id = effectiveArgs.trim();
       if (!id) {
         addMessage("assistant", "Укажи ID: /linkdelete <id>");
         return;
@@ -313,8 +395,10 @@ export default function Home() {
       return;
     }
 
-    const commandKey = commandToKey(command);
-    const aiInput = commandKey ? args || "Пользователь не добавил детали, задай 1-3 уточняющих вопроса." : trimmed;
+    const commandKey = commandToKey(effectiveCommand);
+    const aiInput = commandKey
+      ? effectiveArgs || "Пользователь не добавил детали, задай 1-3 уточняющих вопроса."
+      : trimmed;
 
     try {
       setIsLoading(true);
@@ -336,6 +420,34 @@ export default function Home() {
     if (!text || isLoading || isHydrating) return;
     setInput("");
     await handleInput(text);
+  }
+
+  async function onSaveLinkSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const url = saveUrlInput.trim();
+    const description = saveDescriptionInput.trim();
+    if (!url || isSavingLink || isHydrating || !chatId) return;
+
+    if (!/^https?:\/\/\S+/i.test(url)) {
+      addMessage("assistant", "Ссылка должна начинаться с http:// или https://");
+      return;
+    }
+
+    try {
+      setIsSavingLink(true);
+      const saved = await saveLink(url, description);
+      addMessage(
+        "assistant",
+        `Ссылка сохранена через форму.\nID: ${saved.id}\nURL: ${saved.url}\nОписание: ${saved.description || "—"}`
+      );
+      setSaveUrlInput("");
+      setSaveDescriptionInput("");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Не удалось сохранить ссылку.";
+      addMessage("assistant", message);
+    } finally {
+      setIsSavingLink(false);
+    }
   }
 
   return (
@@ -362,6 +474,35 @@ export default function Home() {
               ))}
             </div>
           </div>
+
+          <form onSubmit={onSaveLinkSubmit} className="mt-4 space-y-2 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+            <p className="text-sm font-medium">Сохранить ссылку</p>
+            <input
+              value={saveUrlInput}
+              onChange={(event) => setSaveUrlInput(event.target.value)}
+              placeholder="1. Ссылка (https://...)"
+              disabled={isHydrating || isSavingLink}
+              className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm outline-none focus:border-blue-500 disabled:opacity-70 dark:border-zinc-700 dark:bg-zinc-900"
+            />
+            <textarea
+              value={saveDescriptionInput}
+              onChange={(event) => setSaveDescriptionInput(event.target.value)}
+              placeholder="2. Описание (опционально)"
+              disabled={isHydrating || isSavingLink}
+              rows={3}
+              className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:opacity-70 dark:border-zinc-700 dark:bg-zinc-900"
+            />
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              Если описание пустое, заполним автоматически по тематике сайта.
+            </p>
+            <button
+              type="submit"
+              disabled={isHydrating || isSavingLink}
+              className="h-10 w-full rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+            >
+              {isSavingLink ? "Сохраняем..." : "Сохранить ссылку"}
+            </button>
+          </form>
         </aside>
 
         <section className="flex min-h-[70vh] flex-col rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
