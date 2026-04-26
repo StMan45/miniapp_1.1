@@ -81,6 +81,7 @@ const HELP_TEXT = `
 const CLIENT_ID_STORAGE_KEY = "smm-miniapp-client-id-v1";
 const TELEGRAM_USER_STORAGE_KEY = "smm-telegram-user-v1";
 const MAX_API_HISTORY = 200;
+const TELEGRAM_BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || "";
 
 const INITIAL_ASSISTANT_MESSAGE = `${HELP_TEXT}\n\nНапиши запрос, например: "Сделай Reels-план для beauty мастера в стиле luxury".`;
 
@@ -255,8 +256,6 @@ export default function Home() {
     return getTelegramMiniAppUser() || getStoredTelegramUser();
   });
   const [isHydrating, setIsHydrating] = useState(true);
-  const [telegramBotUsername, setTelegramBotUsername] = useState("");
-  const [telegramLoginError, setTelegramLoginError] = useState("");
   const [links, setLinks] = useState<LinkItem[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -281,34 +280,10 @@ export default function Home() {
   }, [telegramUser]);
 
   useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const response = await fetch("/api/auth/telegram/config");
-        const data = (await response.json()) as { botUsername?: string; error?: string };
-        if (cancelled) return;
-        if (response.ok && data.botUsername) {
-          setTelegramBotUsername(data.botUsername);
-          setTelegramLoginError("");
-          return;
-        }
-        setTelegramLoginError(data.error || "Не удалось получить username Telegram бота.");
-      } catch {
-        if (!cancelled) {
-          setTelegramLoginError("Не удалось загрузить конфигурацию Telegram Login.");
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
-    if (getTelegramChatId() || telegramUser || !telegramBotUsername) {
+    if (getTelegramChatId() || telegramUser || !TELEGRAM_BOT_USERNAME) {
       return;
     }
 
@@ -352,7 +327,7 @@ export default function Home() {
     const script = document.createElement("script");
     script.async = true;
     script.src = "https://telegram.org/js/telegram-widget.js?22";
-    script.setAttribute("data-telegram-login", telegramBotUsername);
+    script.setAttribute("data-telegram-login", TELEGRAM_BOT_USERNAME);
     script.setAttribute("data-size", "large");
     script.setAttribute("data-radius", "10");
     script.setAttribute("data-userpic", "false");
@@ -365,7 +340,7 @@ export default function Home() {
         delete window.onTelegramAuth;
       }
     };
-  }, [telegramUser, telegramBotUsername]);
+  }, [telegramUser]);
 
   useEffect(() => {
     void (async () => {
@@ -725,10 +700,12 @@ export default function Home() {
                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
                   Авторизуйтесь через Telegram, чтобы получить общую историю и ссылки в web, mini app и боте.
                 </p>
-                {telegramBotUsername ? (
+                {TELEGRAM_BOT_USERNAME ? (
                   <div id="telegram-login-root" className="min-h-10" />
                 ) : (
-                  <p className="text-xs text-amber-600 dark:text-amber-400">{telegramLoginError || "Загрузка Telegram Login..."}</p>
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    Укажите NEXT_PUBLIC_TELEGRAM_BOT_USERNAME в окружении, чтобы включить Telegram Login.
+                  </p>
                 )}
                 <form onSubmit={onCodeLoginSubmit} className="mt-2 space-y-2 rounded-lg border border-zinc-200 p-2 dark:border-zinc-700">
                   <p className="text-xs text-zinc-500 dark:text-zinc-400">
