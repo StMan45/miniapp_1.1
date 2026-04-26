@@ -14,6 +14,17 @@ export type StoredLink = {
   createdAt: string;
 };
 
+export type TelegramUserProfile = {
+  telegramId: string;
+  username: string;
+  firstName: string;
+  lastName: string;
+  photoUrl: string;
+  authDate: string | null;
+  source: "telegram_login" | "miniapp" | "bot";
+  updatedAt: string;
+};
+
 const MAX_LIMIT = 500;
 
 let schemaInitPromise: Promise<void> | null = null;
@@ -65,6 +76,20 @@ async function ensureSchema() {
     await sql`
       CREATE INDEX IF NOT EXISTS idx_saved_links_chat_id_created_at
       ON saved_links (chat_id, created_at)
+    `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS telegram_users (
+        telegram_id TEXT PRIMARY KEY,
+        username TEXT NOT NULL DEFAULT '',
+        first_name TEXT NOT NULL DEFAULT '',
+        last_name TEXT NOT NULL DEFAULT '',
+        photo_url TEXT NOT NULL DEFAULT '',
+        auth_date TIMESTAMPTZ NULL,
+        source TEXT NOT NULL DEFAULT 'miniapp',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
     `;
   })();
 
@@ -172,4 +197,82 @@ export async function removeSavedLink(chatId: string, id: string) {
   `) as Array<{ id: string }>;
 
   return rows.length > 0;
+}
+
+export async function upsertTelegramUser(input: {
+  telegramId: string;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  photoUrl?: string;
+  authDate?: string | null;
+  source: "telegram_login" | "miniapp" | "bot";
+}) {
+  await ensureSchema();
+  const sql = getSqlClient();
+  const authDate = input.authDate ? new Date(input.authDate) : null;
+
+  await sql`
+    INSERT INTO telegram_users (
+      telegram_id,
+      username,
+      first_name,
+      last_name,
+      photo_url,
+      auth_date,
+      source
+    )
+    VALUES (
+      ${input.telegramId},
+      ${input.username?.trim() || ""},
+      ${input.firstName?.trim() || ""},
+      ${input.lastName?.trim() || ""},
+      ${input.photoUrl?.trim() || ""},
+      ${authDate},
+      ${input.source}
+    )
+    ON CONFLICT (telegram_id)
+    DO UPDATE SET
+      username = EXCLUDED.username,
+      first_name = EXCLUDED.first_name,
+      last_name = EXCLUDED.last_name,
+      photo_url = EXCLUDED.photo_url,
+      auth_date = COALESCE(EXCLUDED.auth_date, telegram_users.auth_date),
+      source = EXCLUDED.source,
+      updated_at = NOW()
+  `;
+}
+
+export async function getTelegramUserById(telegramId: string) {
+  await ensureSchema();
+  const sql = getSqlClient();
+  const rows = (await sql`
+    SELECT telegram_id, username, first_name, last_name, photo_url, auth_date, source, updated_at
+    FROM telegram_users
+    WHERE telegram_id = ${telegramId}
+    LIMIT 1
+  `) as Array<{
+    telegram_id: string;
+    username: string;
+    first_name: string;
+    last_name: string;
+    photo_url: string;
+    auth_date: string | Date | null;
+    source: "telegram_login" | "miniapp" | "bot";
+    updated_at: string | Date;
+  }>;
+
+  const row = rows[0];
+  if (!row) return null;
+
+  return {
+    telegramId: row.telegram_id,
+    username: row.username,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    photoUrl: row.photo_url,
+    authDate: row.auth_date ? new Date(row.auth_date).toISOString() : null,
+    source: row.source,
+    updatedAt: new Date(row.updated_at).toISOString(),
+  } satisfies TelegramUserProfile;
 }

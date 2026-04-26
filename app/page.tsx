@@ -23,11 +23,40 @@ type TelegramWebAppData = {
       initDataUnsafe?: {
         user?: {
           id?: number | string;
+          first_name?: string;
+          last_name?: string;
+          username?: string;
+          photo_url?: string;
         };
       };
     };
   };
 };
+
+type TelegramLoginResponseUser = {
+  telegramId: string;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  photoUrl?: string;
+  source?: "telegram_login" | "miniapp" | "bot";
+};
+
+type TelegramWidgetAuthData = {
+  id: number;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  photo_url?: string;
+  auth_date: number;
+  hash: string;
+};
+
+declare global {
+  interface Window {
+    onTelegramAuth?: (authData: TelegramWidgetAuthData) => void;
+  }
+}
 
 const HELP_TEXT = `
 Я SMM-помощник для Instagram Stories, Reels, монтажа, пресетов и шрифтов.
@@ -50,7 +79,9 @@ const HELP_TEXT = `
 `.trim();
 
 const CLIENT_ID_STORAGE_KEY = "smm-miniapp-client-id-v1";
+const TELEGRAM_USER_STORAGE_KEY = "smm-telegram-user-v1";
 const MAX_API_HISTORY = 200;
+const TELEGRAM_BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || "";
 
 const INITIAL_ASSISTANT_MESSAGE = `${HELP_TEXT}\n\nНапиши запрос, например: "Сделай Reels-план для beauty мастера в стиле luxury".`;
 
@@ -154,6 +185,21 @@ function getTelegramChatId() {
   return null;
 }
 
+function getTelegramMiniAppUser() {
+  if (typeof window === "undefined") return null;
+  const maybeTelegram = (window as Window & TelegramWebAppData).Telegram;
+  const user = maybeTelegram?.WebApp?.initDataUnsafe?.user;
+  if (!user?.id) return null;
+  return {
+    telegramId: String(user.id),
+    firstName: user.first_name || "",
+    lastName: user.last_name || "",
+    username: user.username || "",
+    photoUrl: user.photo_url || "",
+    source: "miniapp" as const,
+  };
+}
+
 function getGuestChatId() {
   if (typeof window === "undefined") {
     return "guest-server";
@@ -169,17 +215,43 @@ function getGuestChatId() {
   return created;
 }
 
+function getStoredTelegramUser() {
+  if (typeof window === "undefined") return null;
+  const rawStoredUser = localStorage.getItem(TELEGRAM_USER_STORAGE_KEY);
+  if (!rawStoredUser) return null;
+  try {
+    const parsed = JSON.parse(rawStoredUser) as TelegramLoginResponseUser;
+    if (!parsed?.telegramId) return null;
+    return parsed;
+  } catch {
+    localStorage.removeItem(TELEGRAM_USER_STORAGE_KEY);
+    return null;
+  }
+}
+
 export default function Home() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSavingLink, setIsSavingLink] = useState(false);
   const [saveUrlInput, setSaveUrlInput] = useState("");
   const [saveDescriptionInput, setSaveDescriptionInput] = useState("");
-  const [chatId] = useState(() => {
+  const [chatId, setChatId] = useState(() => {
     if (typeof window === "undefined") {
       return "";
     }
-    return getTelegramChatId() || getGuestChatId();
+    const miniAppUser = getTelegramMiniAppUser();
+    if (miniAppUser) {
+      return `tg:${miniAppUser.telegramId}`;
+    }
+    const storedUser = getStoredTelegramUser();
+    if (storedUser) {
+      return `tg:${storedUser.telegramId}`;
+    }
+    return getGuestChatId();
+  });
+  const [telegramUser, setTelegramUser] = useState<TelegramLoginResponseUser | null>(() => {
+    if (typeof window === "undefined") return null;
+    return getTelegramMiniAppUser() || getStoredTelegramUser();
   });
   const [isHydrating, setIsHydrating] = useState(true);
   const [links, setLinks] = useState<LinkItem[]>([]);
@@ -194,15 +266,101 @@ export default function Home() {
   const quickButtons = useMemo(() => ["/preset", "/fonts", "/reels", "/idea", "/links", "/help", "/historyclear"], []);
 
   useEffect(() => {
+    if (!telegramUser?.telegramId || telegramUser.source !== "miniapp") return;
+    if (typeof window !== "undefined") {
+      localStorage.setItem(TELEGRAM_USER_STORAGE_KEY, JSON.stringify(telegramUser));
+    }
+    void fetch("/api/users/me", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(telegramUser),
+    });
+  }, [telegramUser]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (getTelegramChatId() || telegramUser || !TELEGRAM_BOT_USERNAME) {
+      return;
+    }
+
+    const container = document.getElementById("telegram-login-root");
+    if (!container) return;
+    container.innerHTML = "";
+
+    window.onTelegramAuth = async (authData: TelegramWidgetAuthData) => {
+      const response = await fetch("/api/auth/telegram", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(authData),
+      });
+      const data = (await response.json()) as {
+        chatId?: string;
+        user?: TelegramLoginResponseUser;
+        error?: string;
+      };
+
+      if (!response.ok || !data.user || !data.chatId) {
+        setMessages((prev) => [
+          ...prev,
+          { id: createId(), role: "assistant", text: data.error || "Не удалось авторизоваться через Telegram." },
+        ]);
+        return;
+      }
+
+      setTelegramUser(data.user);
+      setChatId(data.chatId);
+      localStorage.setItem(TELEGRAM_USER_STORAGE_KEY, JSON.stringify(data.user));
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: createId(),
+          role: "assistant",
+          text: "Telegram авторизация выполнена. Подгружаю персональные данные и историю.",
+        },
+      ]);
+    };
+
+    const script = document.createElement("script");
+    script.async = true;
+    script.src = "https://telegram.org/js/telegram-widget.js?22";
+    script.setAttribute("data-telegram-login", TELEGRAM_BOT_USERNAME);
+    script.setAttribute("data-size", "large");
+    script.setAttribute("data-radius", "10");
+    script.setAttribute("data-userpic", "false");
+    script.setAttribute("data-request-access", "write");
+    script.setAttribute("data-onauth", "onTelegramAuth(user)");
+    container.appendChild(script);
+
+    return () => {
+      if (window.onTelegramAuth) {
+        delete window.onTelegramAuth;
+      }
+    };
+  }, [telegramUser]);
+
+  useEffect(() => {
     void (async () => {
       try {
         if (!chatId) {
           return;
         }
 
-        const [historyResponse, linksResponse] = await Promise.all([
+        setIsHydrating(true);
+        setLinks([]);
+        setMessages([
+          {
+            id: createId(),
+            role: "assistant",
+            text: INITIAL_ASSISTANT_MESSAGE,
+          },
+        ]);
+
+        const [historyResponse, linksResponse, userResponse] = await Promise.all([
           fetch(`/api/chat/history?chatId=${encodeURIComponent(chatId)}&limit=${MAX_API_HISTORY}`),
           fetch(`/api/links?chatId=${encodeURIComponent(chatId)}`),
+          fetch(`/api/users/me?chatId=${encodeURIComponent(chatId)}`),
         ]);
 
         if (historyResponse.ok) {
@@ -216,6 +374,16 @@ export default function Home() {
         if (linksResponse.ok) {
           const linksData = (await linksResponse.json()) as { links?: LinkItem[] };
           setLinks(Array.isArray(linksData.links) ? linksData.links : []);
+        }
+
+        if (userResponse.ok) {
+          const userData = (await userResponse.json()) as { user?: TelegramLoginResponseUser | null };
+          if (userData.user?.telegramId) {
+            setTelegramUser(userData.user);
+            if (typeof window !== "undefined") {
+              localStorage.setItem(TELEGRAM_USER_STORAGE_KEY, JSON.stringify(userData.user));
+            }
+          }
         }
       } finally {
         setIsHydrating(false);
@@ -450,6 +618,15 @@ export default function Home() {
     }
   }
 
+  function signOutTelegram() {
+    setTelegramUser(null);
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(TELEGRAM_USER_STORAGE_KEY);
+    }
+    setChatId(getGuestChatId());
+    addMessage("assistant", "Telegram профиль отключен. Вы используете гостевой режим в браузере.");
+  }
+
   return (
     <div className="min-h-screen bg-zinc-50 px-4 py-6 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
       <main className="mx-auto grid w-full max-w-6xl gap-4 lg:grid-cols-[320px_1fr]">
@@ -458,6 +635,41 @@ export default function Home() {
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
             Ответы теперь приходят от подключенной AI-модели. Команды можно не использовать.
           </p>
+
+          <div className="mt-4 space-y-2 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+            <p className="text-sm font-medium">Профиль</p>
+            {telegramUser ? (
+              <div className="space-y-2 text-sm">
+                <p className="rounded-lg bg-zinc-100 px-2 py-1 dark:bg-zinc-800">
+                  {telegramUser.firstName || telegramUser.username || telegramUser.telegramId}
+                  {telegramUser.username ? ` (@${telegramUser.username})` : ""}
+                </p>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">ID: tg:{telegramUser.telegramId}</p>
+                {telegramUser.source === "miniapp" ? null : (
+                  <button
+                    type="button"
+                    onClick={signOutTelegram}
+                    className="h-9 w-full rounded-lg border border-zinc-300 px-3 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  >
+                    Отключить Telegram
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Авторизуйтесь через Telegram, чтобы получить общую историю и ссылки в web, mini app и боте.
+                </p>
+                {TELEGRAM_BOT_USERNAME ? (
+                  <div id="telegram-login-root" className="min-h-10" />
+                ) : (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    Укажите NEXT_PUBLIC_TELEGRAM_BOT_USERNAME в окружении, чтобы включить Telegram Login.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
 
           <div className="mt-4">
             <p className="mb-2 text-sm font-medium">Быстрые действия</p>
