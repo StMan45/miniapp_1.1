@@ -1,9 +1,4 @@
-<<<<<<< HEAD
-import { createTelegramLoginCode, upsertTelegramUser } from "@/lib/chat-storage";
-=======
 import { upsertTelegramUser } from "@/lib/chat-storage";
-
->>>>>>> parent of d26ff3f (fix login)
 type TelegramUpdate = {
   update_id?: number;
   message?: {

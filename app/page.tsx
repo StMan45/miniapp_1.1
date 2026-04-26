@@ -29,15 +29,6 @@ type TelegramWebAppData = {
   };
 };
 
-type TelegramLoginResponseUser = {
-  telegramId: string;
-  username?: string;
-  firstName?: string;
-  lastName?: string;
-  photoUrl?: string;
-  source?: "telegram_login" | "miniapp" | "bot";
-};
-
 const HELP_TEXT = `
 Я SMM-помощник для Instagram Stories, Reels, монтажа, пресетов и шрифтов.
 
@@ -59,9 +50,7 @@ const HELP_TEXT = `
 `.trim();
 
 const CLIENT_ID_STORAGE_KEY = "smm-miniapp-client-id-v1";
-const TELEGRAM_USER_STORAGE_KEY = "smm-telegram-user-v1";
 const MAX_API_HISTORY = 200;
-const TELEGRAM_BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME?.trim() || "";
 
 const INITIAL_ASSISTANT_MESSAGE = `${HELP_TEXT}\n\nНапиши запрос, например: "Сделай Reels-план для beauty мастера в стиле luxury".`;
 
@@ -180,43 +169,17 @@ function getGuestChatId() {
   return created;
 }
 
-function getStoredTelegramUser() {
-  if (typeof window === "undefined") return null;
-  const rawStoredUser = localStorage.getItem(TELEGRAM_USER_STORAGE_KEY);
-  if (!rawStoredUser) return null;
-  try {
-    const parsed = JSON.parse(rawStoredUser) as TelegramLoginResponseUser;
-    if (!parsed?.telegramId) return null;
-    return parsed;
-  } catch {
-    localStorage.removeItem(TELEGRAM_USER_STORAGE_KEY);
-    return null;
-  }
-}
-
 export default function Home() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSavingLink, setIsSavingLink] = useState(false);
   const [saveUrlInput, setSaveUrlInput] = useState("");
   const [saveDescriptionInput, setSaveDescriptionInput] = useState("");
-  const [chatId, setChatId] = useState(() => {
+  const [chatId] = useState(() => {
     if (typeof window === "undefined") {
       return "";
     }
-    const miniAppChatId = getTelegramChatId();
-    if (miniAppChatId) return miniAppChatId;
-    const storedUser = getStoredTelegramUser();
-    if (storedUser?.telegramId) return `tg:${storedUser.telegramId}`;
-    return getGuestChatId();
-  });
-  const [telegramUser, setTelegramUser] = useState<TelegramLoginResponseUser | null>(() => {
-    if (typeof window === "undefined") return null;
-    const miniAppChatId = getTelegramChatId();
-    if (miniAppChatId?.startsWith("tg:")) {
-      return { telegramId: miniAppChatId.slice(3), source: "miniapp" };
-    }
-    return getStoredTelegramUser();
+    return getTelegramChatId() || getGuestChatId();
   });
   const [isHydrating, setIsHydrating] = useState(true);
   const [links, setLinks] = useState<LinkItem[]>([]);
@@ -487,14 +450,6 @@ export default function Home() {
     }
   }
 
-  function signOutTelegram() {
-    setTelegramUser(null);
-    if (typeof window !== "undefined") {
-      localStorage.removeItem(TELEGRAM_USER_STORAGE_KEY);
-    }
-    setChatId(getGuestChatId());
-    addMessage("assistant", "Telegram профиль отключен. Вы используете гостевой режим в браузере.");
-  }
   return (
     <div className="min-h-screen bg-zinc-50 px-4 py-6 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
       <main className="mx-auto grid w-full max-w-6xl gap-4 lg:grid-cols-[320px_1fr]">
@@ -504,40 +459,6 @@ export default function Home() {
             Ответы теперь приходят от подключенной AI-модели. Команды можно не использовать.
           </p>
 
-          <div className="mt-4 space-y-2 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
-            <p className="text-sm font-medium">Профиль</p>
-            {telegramUser ? (
-              <div className="space-y-2 text-sm">
-                <p className="rounded-lg bg-zinc-100 px-2 py-1 dark:bg-zinc-800">
-                  {telegramUser.firstName || telegramUser.username || telegramUser.telegramId}
-                  {telegramUser.username ? ` (@${telegramUser.username})` : ""}
-                </p>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">ID: tg:{telegramUser.telegramId}</p>
-                {telegramUser.source === "miniapp" ? null : (
-                  <button
-                    type="button"
-                    onClick={signOutTelegram}
-                    className="h-9 w-full rounded-lg border border-zinc-300 px-3 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                  >
-                    Отключить Telegram
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Авторизуйтесь через Telegram, чтобы получить общую историю и ссылки в web, mini app и боте.
-                </p>
-                {TELEGRAM_BOT_USERNAME ? (
-                  <div id="telegram-login-root" className="min-h-10" />
-                ) : (
-                  <p className="text-xs text-amber-600 dark:text-amber-400">
-                    Укажите NEXT_PUBLIC_TELEGRAM_BOT_USERNAME в окружении, чтобы включить Telegram Login.
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
           <div className="mt-4">
             <p className="mb-2 text-sm font-medium">Быстрые действия</p>
             <div className="flex flex-wrap gap-2">
