@@ -30,10 +30,15 @@ const HELP_TEXT = `
 /save — сохранить ссылку: /save https://site.com описание
 /links — показать сохраненные ссылки
 /linkdelete — удалить ссылку по ID
+/historyclear — очистить сохраненную переписку
 /help — показать эту подсказку
 `.trim();
 
 const STORAGE_KEY = "smm-miniapp-links-v1";
+const CHAT_STORAGE_KEY = "smm-miniapp-chat-v1";
+const MAX_STORED_MESSAGES = 200;
+
+const INITIAL_ASSISTANT_MESSAGE = `${HELP_TEXT}\n\nНапиши запрос, например: "Сделай Reels-план для beauty мастера в стиле luxury".`;
 
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -80,22 +85,56 @@ export default function Home() {
       return [];
     }
   });
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: createId(),
-      role: "assistant",
-      text: `${HELP_TEXT}\n\nНапиши запрос, например: "Сделай Reels-план для beauty мастера в стиле luxury".`,
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    if (typeof window === "undefined") {
+      return [{ id: createId(), role: "assistant", text: INITIAL_ASSISTANT_MESSAGE }];
+    }
+
+    try {
+      const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+      if (!raw) {
+        return [{ id: createId(), role: "assistant", text: INITIAL_ASSISTANT_MESSAGE }];
+      }
+      const parsed = JSON.parse(raw) as ChatMessage[];
+      if (!Array.isArray(parsed)) {
+        return [{ id: createId(), role: "assistant", text: INITIAL_ASSISTANT_MESSAGE }];
+      }
+
+      const normalized = parsed
+        .filter(
+          (item) =>
+            item &&
+            (item.role === "assistant" || item.role === "user") &&
+            typeof item.text === "string" &&
+            item.text.trim()
+        )
+        .map((item) => ({
+          id: typeof item.id === "string" && item.id.trim() ? item.id : createId(),
+          role: item.role,
+          text: item.text,
+        }))
+        .slice(-MAX_STORED_MESSAGES);
+
+      if (!normalized.length) {
+        return [{ id: createId(), role: "assistant", text: INITIAL_ASSISTANT_MESSAGE }];
+      }
+
+      return normalized;
+    } catch {
+      localStorage.removeItem(CHAT_STORAGE_KEY);
+      return [{ id: createId(), role: "assistant", text: INITIAL_ASSISTANT_MESSAGE }];
+    }
+  });
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(links));
   }, [links]);
 
-  const quickButtons = useMemo(
-    () => ["/preset", "/fonts", "/reels", "/idea", "/links", "/help"],
-    []
-  );
+  useEffect(() => {
+    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages.slice(-MAX_STORED_MESSAGES)));
+  }, [messages]);
+
+  const quickButtons = useMemo(() => ["/preset", "/fonts", "/reels", "/idea", "/links", "/help", "/historyclear"], []);
 
   function addMessage(role: ChatMessage["role"], text: string) {
     setMessages((prev) => [...prev, { id: createId(), role, text }]);
@@ -149,6 +188,18 @@ export default function Home() {
 
     if (command === "/help") {
       addMessage("assistant", HELP_TEXT);
+      return;
+    }
+
+    if (command === "/historyclear") {
+      setMessages([
+        {
+          id: createId(),
+          role: "assistant",
+          text: INITIAL_ASSISTANT_MESSAGE,
+        },
+      ]);
+      addMessage("assistant", "История переписки очищена.");
       return;
     }
 
