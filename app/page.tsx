@@ -173,6 +173,7 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSavingLink, setIsSavingLink] = useState(false);
+  const [isClearingHistory, setIsClearingHistory] = useState(false);
   const [saveUrlInput, setSaveUrlInput] = useState("");
   const [saveDescriptionInput, setSaveDescriptionInput] = useState("");
   const [chatId] = useState(() => {
@@ -229,6 +230,13 @@ export default function Home() {
     return item;
   }
 
+  function buildApiHistory(sourceMessages: ChatMessage[]) {
+    return sourceMessages
+      .filter((m) => m.role === "assistant" || m.role === "user")
+      .map((m) => ({ role: m.role, text: m.text }))
+      .slice(-12);
+  }
+
   function buildLinksList() {
     if (!links.length) {
       return "Список ссылок пуст. Добавь первую через /save https://site.com описание";
@@ -259,12 +267,11 @@ export default function Home() {
     return data.link as LinkItem;
   }
 
-  async function requestAssistantReply(userInput: string, commandKey: CommandKey | null) {
-    const history = messages
-      .filter((m) => m.role === "assistant" || m.role === "user")
-      .map((m) => ({ role: m.role, text: m.text }))
-      .slice(-12);
-
+  async function requestAssistantReply(
+    userInput: string,
+    commandKey: CommandKey | null,
+    history: Array<{ role: "assistant" | "user"; text: string }>
+  ) {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -284,6 +291,33 @@ export default function Home() {
     addMessage("assistant", data.reply);
   }
 
+  async function clearHistory() {
+    if (!chatId || isClearingHistory) {
+      return;
+    }
+
+    try {
+      setIsClearingHistory(true);
+      const response = await fetch("/api/chat/history", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId }),
+      });
+
+      if (!response.ok) {
+        addMessage("assistant", "Не удалось очистить историю на сервере.");
+        return;
+      }
+
+      setMessages([
+        { id: createId(), role: "assistant", text: INITIAL_ASSISTANT_MESSAGE },
+        { id: createId(), role: "assistant", text: "Контекст очищен. Начнем заново." },
+      ]);
+    } finally {
+      setIsClearingHistory(false);
+    }
+  }
+
   async function handleInput(userText: string) {
     const trimmed = userText.trim();
     if (!trimmed) return;
@@ -292,7 +326,6 @@ export default function Home() {
       return;
     }
 
-    addMessage("user", trimmed);
     const parsed = splitCommand(trimmed);
     const detectedSave = detectSaveLinkIntent(trimmed);
     const templatePayload = detectTemplateLinkPayload(trimmed);
@@ -314,21 +347,7 @@ export default function Home() {
     }
 
     if (effectiveCommand === "/historyclear") {
-      const response = await fetch("/api/chat/history", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chatId }),
-      });
-
-      if (!response.ok) {
-        addMessage("assistant", "Не удалось очистить историю на сервере.");
-        return;
-      }
-
-      setMessages([
-        { id: createId(), role: "assistant", text: INITIAL_ASSISTANT_MESSAGE },
-        { id: createId(), role: "assistant", text: "История переписки очищена." },
-      ]);
+      await clearHistory();
       return;
     }
 
@@ -402,7 +421,10 @@ export default function Home() {
 
     try {
       setIsLoading(true);
-      await requestAssistantReply(aiInput, commandKey);
+      const userMessage: ChatMessage = { id: createId(), role: "user", text: trimmed };
+      const nextMessages = [...messages, userMessage];
+      setMessages(nextMessages);
+      await requestAssistantReply(aiInput, commandKey, buildApiHistory(nextMessages));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Ошибка соединения с AI";
       addMessage(
@@ -508,16 +530,27 @@ export default function Home() {
         <section className="flex h-[calc(100dvh-3rem)] min-h-[520px] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
             {messages.map((message) => (
-              <article
-                key={message.id}
-                className={`max-w-[92%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-6 ${
-                  message.role === "assistant"
-                    ? "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
-                    : "ml-auto bg-blue-600 text-white"
-                }`}
-              >
-                {message.text}
-              </article>
+              <div key={message.id} className={message.role === "assistant" ? "max-w-[92%]" : "max-w-[92%] ml-auto"}>
+                <article
+                  className={`whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-6 ${
+                    message.role === "assistant"
+                      ? "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
+                      : "bg-blue-600 text-white"
+                  }`}
+                >
+                  {message.text}
+                </article>
+                {message.role === "assistant" ? (
+                  <button
+                    type="button"
+                    onClick={() => void clearHistory()}
+                    disabled={isClearingHistory || isHydrating}
+                    className="mt-2 text-xs text-zinc-500 underline decoration-zinc-400 underline-offset-2 hover:text-zinc-700 disabled:cursor-not-allowed disabled:opacity-60 dark:text-zinc-400 dark:hover:text-zinc-200"
+                  >
+                    {isClearingHistory ? "Очищаем контекст..." : "Очистить контекст"}
+                  </button>
+                ) : null}
+              </div>
             ))}
             {isLoading ? (
               <article className="max-w-[92%] rounded-2xl bg-zinc-100 px-4 py-3 text-sm text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
