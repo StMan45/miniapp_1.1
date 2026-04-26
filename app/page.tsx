@@ -354,7 +354,7 @@ export default function Home() {
     script.setAttribute("data-size", "large");
     script.setAttribute("data-radius", "10");
     script.setAttribute("data-userpic", "false");
-    script.setAttribute("data-request-access", "write");
+    script.setAttribute("data-request-access", "default");
     script.setAttribute("data-onauth", "onTelegramAuth(user)");
     container.appendChild(script);
 
