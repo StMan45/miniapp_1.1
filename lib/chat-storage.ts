@@ -14,17 +14,6 @@ export type StoredLink = {
   createdAt: string;
 };
 
-export type TelegramUserProfile = {
-  telegramId: string;
-  username: string;
-  firstName: string;
-  lastName: string;
-  photoUrl: string;
-  authDate: string | null;
-  source: "telegram_login" | "miniapp" | "bot";
-  updatedAt: string;
-};
-
 const MAX_LIMIT = 500;
 
 let schemaInitPromise: Promise<void> | null = null;
@@ -78,34 +67,6 @@ async function ensureSchema() {
       ON saved_links (chat_id, created_at)
     `;
 
-    await sql`
-      CREATE TABLE IF NOT EXISTS telegram_users (
-        telegram_id TEXT PRIMARY KEY,
-        username TEXT NOT NULL DEFAULT '',
-        first_name TEXT NOT NULL DEFAULT '',
-        last_name TEXT NOT NULL DEFAULT '',
-        photo_url TEXT NOT NULL DEFAULT '',
-        auth_date TIMESTAMPTZ NULL,
-        source TEXT NOT NULL DEFAULT 'miniapp',
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `;
-
-    await sql`
-      CREATE TABLE IF NOT EXISTS telegram_login_codes (
-        code TEXT PRIMARY KEY,
-        telegram_id TEXT NOT NULL,
-        expires_at TIMESTAMPTZ NOT NULL,
-        used_at TIMESTAMPTZ NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `;
-
-    await sql`
-      CREATE INDEX IF NOT EXISTS idx_telegram_login_codes_telegram_id_created_at
-      ON telegram_login_codes (telegram_id, created_at DESC)
-    `;
   })();
 
   return schemaInitPromise;
@@ -212,114 +173,4 @@ export async function removeSavedLink(chatId: string, id: string) {
   `) as Array<{ id: string }>;
 
   return rows.length > 0;
-}
-
-export async function upsertTelegramUser(input: {
-  telegramId: string;
-  username?: string;
-  firstName?: string;
-  lastName?: string;
-  photoUrl?: string;
-  authDate?: string | null;
-  source: "telegram_login" | "miniapp" | "bot";
-}) {
-  await ensureSchema();
-  const sql = getSqlClient();
-  const authDate = input.authDate ? new Date(input.authDate) : null;
-
-  await sql`
-    INSERT INTO telegram_users (
-      telegram_id,
-      username,
-      first_name,
-      last_name,
-      photo_url,
-      auth_date,
-      source
-    )
-    VALUES (
-      ${input.telegramId},
-      ${input.username?.trim() || ""},
-      ${input.firstName?.trim() || ""},
-      ${input.lastName?.trim() || ""},
-      ${input.photoUrl?.trim() || ""},
-      ${authDate},
-      ${input.source}
-    )
-    ON CONFLICT (telegram_id)
-    DO UPDATE SET
-      username = EXCLUDED.username,
-      first_name = EXCLUDED.first_name,
-      last_name = EXCLUDED.last_name,
-      photo_url = EXCLUDED.photo_url,
-      auth_date = COALESCE(EXCLUDED.auth_date, telegram_users.auth_date),
-      source = EXCLUDED.source,
-      updated_at = NOW()
-  `;
-}
-
-export async function getTelegramUserById(telegramId: string) {
-  await ensureSchema();
-  const sql = getSqlClient();
-  const rows = (await sql`
-    SELECT telegram_id, username, first_name, last_name, photo_url, auth_date, source, updated_at
-    FROM telegram_users
-    WHERE telegram_id = ${telegramId}
-    LIMIT 1
-  `) as Array<{
-    telegram_id: string;
-    username: string;
-    first_name: string;
-    last_name: string;
-    photo_url: string;
-    auth_date: string | Date | null;
-    source: "telegram_login" | "miniapp" | "bot";
-    updated_at: string | Date;
-  }>;
-
-  const row = rows[0];
-  if (!row) return null;
-
-  return {
-    telegramId: row.telegram_id,
-    username: row.username,
-    firstName: row.first_name,
-    lastName: row.last_name,
-    photoUrl: row.photo_url,
-    authDate: row.auth_date ? new Date(row.auth_date).toISOString() : null,
-    source: row.source,
-    updatedAt: new Date(row.updated_at).toISOString(),
-  } satisfies TelegramUserProfile;
-}
-
-export async function createTelegramLoginCode(telegramId: string) {
-  await ensureSchema();
-  const sql = getSqlClient();
-  const code = `${Math.floor(100000 + Math.random() * 900000)}`;
-  const expiresAt = new Date(Date.now() + 1000 * 60 * 5);
-
-  await sql`
-    INSERT INTO telegram_login_codes (code, telegram_id, expires_at)
-    VALUES (${code}, ${telegramId}, ${expiresAt})
-  `;
-
-  return {
-    code,
-    expiresAt: expiresAt.toISOString(),
-  };
-}
-
-export async function consumeTelegramLoginCode(code: string) {
-  await ensureSchema();
-  const sql = getSqlClient();
-  const rows = (await sql`
-    UPDATE telegram_login_codes
-    SET used_at = NOW()
-    WHERE code = ${code}
-      AND used_at IS NULL
-      AND expires_at > NOW()
-    RETURNING telegram_id
-  `) as Array<{ telegram_id: string }>;
-
-  return rows[0]?.telegram_id || null;
 }

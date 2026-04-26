@@ -1,15 +1,8 @@
-import { upsertTelegramUser } from "@/lib/chat-storage";
 type TelegramUpdate = {
   update_id?: number;
   message?: {
     message_id?: number;
     text?: string;
-    from?: {
-      id?: number;
-      first_name?: string;
-      last_name?: string;
-      username?: string;
-    };
     chat?: { id?: number; type?: string };
   };
 };
@@ -223,19 +216,8 @@ async function handleMessage(message: NonNullable<TelegramUpdate["message"]>) {
   const text = message.text?.trim();
   const chatId = message.chat?.id;
   const chatType = message.chat?.type;
-  const from = message.from;
   const replyToMessageId = message.message_id;
   if (!text || !chatId || chatType !== "private") return;
-
-  if (from?.id) {
-    await upsertTelegramUser({
-      telegramId: String(from.id),
-      username: from.username,
-      firstName: from.first_name,
-      lastName: from.last_name,
-      source: "bot",
-    });
-  }
 
   const { command, args } = splitCommand(text);
 
