@@ -91,6 +91,21 @@ async function ensureSchema() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS telegram_login_codes (
+        code TEXT PRIMARY KEY,
+        telegram_id TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used_at TIMESTAMPTZ NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_telegram_login_codes_telegram_id_created_at
+      ON telegram_login_codes (telegram_id, created_at DESC)
+    `;
   })();
 
   return schemaInitPromise;
@@ -275,4 +290,36 @@ export async function getTelegramUserById(telegramId: string) {
     source: row.source,
     updatedAt: new Date(row.updated_at).toISOString(),
   } satisfies TelegramUserProfile;
+}
+
+export async function createTelegramLoginCode(telegramId: string) {
+  await ensureSchema();
+  const sql = getSqlClient();
+  const code = `${Math.floor(100000 + Math.random() * 900000)}`;
+  const expiresAt = new Date(Date.now() + 1000 * 60 * 5);
+
+  await sql`
+    INSERT INTO telegram_login_codes (code, telegram_id, expires_at)
+    VALUES (${code}, ${telegramId}, ${expiresAt})
+  `;
+
+  return {
+    code,
+    expiresAt: expiresAt.toISOString(),
+  };
+}
+
+export async function consumeTelegramLoginCode(code: string) {
+  await ensureSchema();
+  const sql = getSqlClient();
+  const rows = (await sql`
+    UPDATE telegram_login_codes
+    SET used_at = NOW()
+    WHERE code = ${code}
+      AND used_at IS NULL
+      AND expires_at > NOW()
+    RETURNING telegram_id
+  `) as Array<{ telegram_id: string }>;
+
+  return rows[0]?.telegram_id || null;
 }
