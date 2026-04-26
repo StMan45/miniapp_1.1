@@ -452,7 +452,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-zinc-50 px-4 py-6 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
-      <main className="mx-auto grid w-full max-w-6xl gap-4 lg:grid-cols-[320px_1fr]">
+      <main className="mx-auto grid w-full max-w-6xl items-start gap-4 lg:grid-cols-[320px_1fr]">
         <aside className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <h1 className="text-xl font-semibold">SMM Mini Assistant</h1>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
@@ -505,7 +505,7 @@ export default function Home() {
           </form>
         </aside>
 
-        <section className="flex min-h-[70vh] flex-col rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+        <section className="flex h-[calc(100dvh-3rem)] min-h-[520px] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
             {messages.map((message) => (
               <article
